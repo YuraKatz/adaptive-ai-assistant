@@ -46,10 +46,10 @@ namespace AdaptiveAIBot.Services
                 Temperature = 0.7
             };
 
-            // ✅ ИСПРАВЛЕНО: Правильная настройка JSON serialization
+            // ✅ ИСПРАВЛЕНО: Используем snake_case для совместимости с API
             var jsonOptions = new JsonSerializerOptions
             {
-                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                 WriteIndented = false
             };
 
@@ -60,6 +60,7 @@ namespace AdaptiveAIBot.Services
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
             _logger.LogInformation($"Sending request to DeepSeek API with {messages.Length} messages...");
+            _logger.LogInformation($"Request JSON: {json}");
 
             try
             {
@@ -76,10 +77,10 @@ namespace AdaptiveAIBot.Services
                 var responseJson = await response.Content.ReadAsStringAsync();
                 _logger.LogInformation($"DeepSeek response received, length: {responseJson.Length}");
 
-                // ✅ ИСПРАВЛЕНО: Обработка ответа с правильным JsonNamingPolicy
+                // ✅ ИСПРАВЛЕНО: Правильная десериализация ответа
                 var responseOptions = new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
                     PropertyNameCaseInsensitive = true
                 };
 
@@ -107,8 +108,8 @@ namespace AdaptiveAIBot.Services
                 Content = GetSystemPrompt(context.UserId)
             });
 
-            // Добавляем контекст разговора (если есть)
-            foreach (var contextMessage in context.Messages.Take(20)) // Ограничиваем количество для экономии токенов
+            // Добавляем контекст разговора (последние 15 сообщений для экономии токенов)
+            foreach (var contextMessage in context.Messages.TakeLast(15))
             {
                 if (!string.IsNullOrWhiteSpace(contextMessage.Content))
                 {
@@ -137,7 +138,7 @@ namespace AdaptiveAIBot.Services
 
 Твои возможности:
 - Отвечаешь на вопросы пользователя, используя контекст предыдущих разговоров
-- Помогаешь организовывать и находить информацию
+- Помогаешь организовывать и находить информацию  
 - Предлагаешь сохранить важную информацию в базу знаний
 - Общаешься естественно и дружелюбно на русском языке
 
