@@ -3,6 +3,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AdaptiveAIBot.Services
 {
@@ -27,7 +28,6 @@ namespace AdaptiveAIBot.Services
 
         public async Task<string> ProcessMessageAsync(string userMessage)
         {
-            // Простая версия без контекста для backward compatibility
             return await ProcessMessageAsync(userMessage, new ConversationContext());
         }
 
@@ -35,7 +35,6 @@ namespace AdaptiveAIBot.Services
         {
             _logger.LogInformation($"Calling DeepSeek API with message: {userMessage}, context messages: {context.Messages.Count}");
 
-            // Строим массив сообщений для API включая контекст
             var messages = BuildMessagesForApi(userMessage, context);
 
             var request = new DeepSeekRequest
@@ -46,11 +45,12 @@ namespace AdaptiveAIBot.Services
                 Temperature = 0.7
             };
 
-            // ✅ ИСПРАВЛЕНО: Используем snake_case для совместимости с API
+            // ✅ ИСПРАВЛЕНО: Используем snake_case как требует DeepSeek API
             var jsonOptions = new JsonSerializerOptions
             {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-                WriteIndented = false
+                WriteIndented = false,
+                PropertyNamingPolicy = null, // Используем JsonPropertyName атрибуты
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             };
 
             var json = JsonSerializer.Serialize(request, jsonOptions);
@@ -60,39 +60,55 @@ namespace AdaptiveAIBot.Services
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
             _logger.LogInformation($"Sending request to DeepSeek API with {messages.Length} messages...");
-            _logger.LogInformation($"Request JSON: {json}");
+            _logger.LogDebug($"Request JSON: {json}");
 
             try
             {
                 var response = await _httpClient.PostAsync("https://api.deepseek.com/v1/chat/completions", content);
+                var responseJson = await response.Content.ReadAsStringAsync();
+
                 _logger.LogInformation($"DeepSeek API response status: {response.StatusCode}");
+                _logger.LogDebug($"Response JSON: {responseJson}");
 
                 if (!response.IsSuccessStatusCode)
                 {
-                    var errorContent = await response.Content.ReadAsStringAsync();
-                    _logger.LogError($"DeepSeek API error: {response.StatusCode} - {errorContent}");
+                    _logger.LogError($"DeepSeek API error: {response.StatusCode} - {responseJson}");
                     return "Извините, произошла ошибка при обработке вашего сообщения.";
                 }
-
-                var responseJson = await response.Content.ReadAsStringAsync();
-                _logger.LogInformation($"DeepSeek response received, length: {responseJson.Length}");
 
                 // ✅ ИСПРАВЛЕНО: Правильная десериализация ответа
                 var responseOptions = new JsonSerializerOptions
                 {
-                    PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
-                    PropertyNameCaseInsensitive = true
+                    PropertyNameCaseInsensitive = true,
+                    PropertyNamingPolicy = null // Используем JsonPropertyName атрибуты
                 };
 
                 var deepSeekResponse = JsonSerializer.Deserialize<DeepSeekResponse>(responseJson, responseOptions);
                 var aiResponse = deepSeekResponse?.Choices?.FirstOrDefault()?.Message?.Content ?? "Не удалось получить ответ.";
 
+                // Логируем usage для мониторинга расходов
+                if (deepSeekResponse?.Usage != null)
+                {
+                    var usage = deepSeekResponse.Usage;
+                    _logger.LogInformation($"Token usage - Prompt: {usage.PromptTokens}, Completion: {usage.CompletionTokens}, Total: {usage.TotalTokens}");
+                }
+
                 _logger.LogInformation($"AI response generated, length: {aiResponse.Length}");
                 return aiResponse;
             }
+            catch (JsonException ex)
+            {
+                _logger.LogError(ex, "JSON serialization/deserialization error");
+                return "Произошла ошибка обработки ответа. Попробуйте позже.";
+            }
+            catch (HttpRequestException ex)
+            {
+                _logger.LogError(ex, "HTTP request error");
+                return "Проблема с сетевым соединением. Попробуйте позже.";
+            }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Exception calling DeepSeek API");
+                _logger.LogError(ex, "Unexpected error calling DeepSeek API");
                 return "Произошла техническая ошибка. Попробуйте позже.";
             }
         }
@@ -108,17 +124,29 @@ namespace AdaptiveAIBot.Services
                 Content = GetSystemPrompt(context.UserId)
             });
 
-            // Добавляем контекст разговора (последние 15 сообщений для экономии токенов)
-            foreach (var contextMessage in context.Messages.TakeLast(15))
+            // Добавляем сжатый контекст если есть
+            if (!string.IsNullOrEmpty(context.CompressedSummary))
             {
-                if (!string.IsNullOrWhiteSpace(contextMessage.Content))
+                messages.Add(new DeepSeekMessage
                 {
-                    messages.Add(new DeepSeekMessage
-                    {
-                        Role = contextMessage.Role,
-                        Content = contextMessage.Content
-                    });
-                }
+                    Role = "system",
+                    Content = $"[PREVIOUS CONTEXT]: {context.CompressedSummary}"
+                });
+            }
+
+            // Добавляем последние сообщения (ограничиваем для экономии токенов)
+            var recentMessages = context.Messages
+                .Where(m => !m.IsCompressed && !string.IsNullOrWhiteSpace(m.Content))
+                .TakeLast(15) // Ограничиваем количество
+                .ToList();
+
+            foreach (var contextMessage in recentMessages)
+            {
+                messages.Add(new DeepSeekMessage
+                {
+                    Role = contextMessage.Role,
+                    Content = contextMessage.Content
+                });
             }
 
             // Добавляем текущее сообщение пользователя
@@ -128,7 +156,7 @@ namespace AdaptiveAIBot.Services
                 Content = userMessage
             });
 
-            _logger.LogInformation($"Built message array with {messages.Count} messages for API");
+            _logger.LogInformation($"Built message array with {messages.Count} messages for API (recent: {recentMessages.Count})");
             return messages.ToArray();
         }
 
@@ -138,9 +166,11 @@ namespace AdaptiveAIBot.Services
 
 Твои возможности:
 - Отвечаешь на вопросы пользователя, используя контекст предыдущих разговоров
-- Помогаешь организовывать и находить информацию  
+- Помогаешь организовывать и находить информацию
 - Предлагаешь сохранить важную информацию в базу знаний
 - Общаешься естественно и дружелюбно на русском языке
+
+Стиль общения: прямой, без лишних восторгов, техническая глубина когда нужно.
 
 Если в разговоре появляется важная информация (проекты, задачи, решения, контакты), предложи пользователю сохранить её.
 
