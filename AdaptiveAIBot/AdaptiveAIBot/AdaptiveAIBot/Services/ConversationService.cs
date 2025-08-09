@@ -199,7 +199,7 @@ namespace AdaptiveAIBot.Services
 
             // Анализируем последние сообщения на предмет важной информации
             var recentImportantMessages = context.Messages
-                .Where(m => m.Role == "user" && m.ImportanceScore > 0.3)
+                .Where(m => m.Role == "user" && m.ImportanceScore.HasValue && m.ImportanceScore.Value > 0.3)
                 .TakeLast(5)
                 .ToList();
 
@@ -213,7 +213,7 @@ namespace AdaptiveAIBot.Services
                         UpdateType = "add_section",
                         Data = new { content = message.Content, timestamp = message.Timestamp },
                         Reason = "Обнаружена информация о проекте",
-                        Confidence = message.ImportanceScore ?? 0.5
+                        Confidence = message.ImportanceScore.GetValueOrDefault(0.5)
                     });
                 }
 
@@ -225,7 +225,7 @@ namespace AdaptiveAIBot.Services
                         UpdateType = "add_section",
                         Data = new { content = message.Content, timestamp = message.Timestamp },
                         Reason = "Обнаружена информация о встрече",
-                        Confidence = message.ImportanceScore ?? 0.5
+                        Confidence = message.ImportanceScore.GetValueOrDefault(0.5)
                     });
                 }
             }
@@ -244,7 +244,7 @@ namespace AdaptiveAIBot.Services
 
             return $"Conversation summary ({messages.Count} messages over {timespan.TotalMinutes:F0} minutes): " +
                    $"Topics discussed: {string.Join(", ", allTopics.Take(5))}. " +
-                   $"Key user queries: {string.Join("; ", userMessages.Take(3).Select(m => m?.Substring(0, Math.Min(50, m.Length ?? 0))))}";
+                   $"Key user queries: {string.Join("; ", userMessages.Take(3).Select(m => m?.Substring(0, Math.Min(50, m?.Length ?? 0))))}";
         }
     }
 }

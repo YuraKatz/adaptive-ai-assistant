@@ -5,6 +5,11 @@ using System.Text.Json;
 
 namespace AdaptiveAIBot.Services
 {
+    public interface ITelegramService
+    {
+        Task SendMessageAsync(long chatId, string message);
+    }
+
     public class TelegramService : ITelegramService
     {
         private readonly HttpClient _httpClient;

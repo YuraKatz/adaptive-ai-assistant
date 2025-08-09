@@ -45,11 +45,10 @@ namespace AdaptiveAIBot.Services
                 Temperature = 0.7
             };
 
-            // ✅ ИСПРАВЛЕНО: Используем snake_case как требует DeepSeek API
             var jsonOptions = new JsonSerializerOptions
             {
                 WriteIndented = false,
-                PropertyNamingPolicy = null, // Используем JsonPropertyName атрибуты
+                PropertyNamingPolicy = null,
                 DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull
             };
 
@@ -60,7 +59,6 @@ namespace AdaptiveAIBot.Services
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_apiKey}");
 
             _logger.LogInformation($"Sending request to DeepSeek API with {messages.Length} messages...");
-            _logger.LogDebug($"Request JSON: {json}");
 
             try
             {
@@ -68,7 +66,6 @@ namespace AdaptiveAIBot.Services
                 var responseJson = await response.Content.ReadAsStringAsync();
 
                 _logger.LogInformation($"DeepSeek API response status: {response.StatusCode}");
-                _logger.LogDebug($"Response JSON: {responseJson}");
 
                 if (!response.IsSuccessStatusCode)
                 {
@@ -76,40 +73,32 @@ namespace AdaptiveAIBot.Services
                     return "Извините, произошла ошибка при обработке вашего сообщения.";
                 }
 
-                // ✅ ИСПРАВЛЕНО: Правильная десериализация ответа
                 var responseOptions = new JsonSerializerOptions
                 {
                     PropertyNameCaseInsensitive = true,
-                    PropertyNamingPolicy = null // Используем JsonPropertyName атрибуты
+                    PropertyNamingPolicy = null
                 };
 
                 var deepSeekResponse = JsonSerializer.Deserialize<DeepSeekResponse>(responseJson, responseOptions);
                 var aiResponse = deepSeekResponse?.Choices?.FirstOrDefault()?.Message?.Content ?? "Не удалось получить ответ.";
 
-                // Логируем usage для мониторинга расходов
                 if (deepSeekResponse?.Usage != null)
                 {
                     var usage = deepSeekResponse.Usage;
                     _logger.LogInformation($"Token usage - Prompt: {usage.PromptTokens}, Completion: {usage.CompletionTokens}, Total: {usage.TotalTokens}");
                 }
 
-                _logger.LogInformation($"AI response generated, length: {aiResponse.Length}");
                 return aiResponse;
             }
             catch (JsonException ex)
             {
-                _logger.LogError(ex, "JSON serialization/deserialization error");
-                return "Произошла ошибка обработки ответа. Попробуйте позже.";
-            }
-            catch (HttpRequestException ex)
-            {
-                _logger.LogError(ex, "HTTP request error");
-                return "Проблема с сетевым соединением. Попробуйте позже.";
+                _logger.LogError(ex, "JSON serialization error");
+                return "Произошла ошибка обработки ответа.";
             }
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Unexpected error calling DeepSeek API");
-                return "Произошла техническая ошибка. Попробуйте позже.";
+                return "Произошла техническая ошибка.";
             }
         }
 
@@ -117,14 +106,12 @@ namespace AdaptiveAIBot.Services
         {
             var messages = new List<DeepSeekMessage>();
 
-            // Добавляем system prompt
             messages.Add(new DeepSeekMessage
             {
                 Role = "system",
-                Content = GetSystemPrompt(context.UserId)
+                Content = GetSystemPrompt()
             });
 
-            // Добавляем сжатый контекст если есть
             if (!string.IsNullOrEmpty(context.CompressedSummary))
             {
                 messages.Add(new DeepSeekMessage
@@ -134,10 +121,9 @@ namespace AdaptiveAIBot.Services
                 });
             }
 
-            // Добавляем последние сообщения (ограничиваем для экономии токенов)
             var recentMessages = context.Messages
                 .Where(m => !m.IsCompressed && !string.IsNullOrWhiteSpace(m.Content))
-                .TakeLast(15) // Ограничиваем количество
+                .TakeLast(15)
                 .ToList();
 
             foreach (var contextMessage in recentMessages)
@@ -149,18 +135,16 @@ namespace AdaptiveAIBot.Services
                 });
             }
 
-            // Добавляем текущее сообщение пользователя
             messages.Add(new DeepSeekMessage
             {
                 Role = "user",
                 Content = userMessage
             });
 
-            _logger.LogInformation($"Built message array with {messages.Count} messages for API (recent: {recentMessages.Count})");
             return messages.ToArray();
         }
 
-        private string GetSystemPrompt(long userId)
+        private string GetSystemPrompt()
         {
             return @"Ты умный AI-ассистент для персонального управления знаниями. 
 
