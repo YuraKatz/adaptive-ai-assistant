@@ -1,12 +1,14 @@
-﻿using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
-using System.Threading.Tasks;
+﻿using AdaptiveAIBot.Models;
 
 namespace AdaptiveAIBot.Services
 {
-    internal interface IConversationService
+    public interface IConversationService
     {
+        Task<ConversationContext> GetConversationContextAsync(long userId);
+        Task AddMessageAsync(long userId, string userMessage, string aiResponse);
+        Task<bool> ShouldCompressContextAsync(long userId);
+        Task CompressConversationAsync(long userId);
+        Task<MessageAnalysis> AnalyzeMessageAsync(string message);
+        Task<List<KnowledgeUpdateSuggestion>> GetKnowledgeUpdateSuggestionsAsync(long userId);
     }
 }

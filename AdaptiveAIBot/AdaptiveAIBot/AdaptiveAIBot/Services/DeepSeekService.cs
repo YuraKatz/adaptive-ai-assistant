@@ -46,11 +46,14 @@ namespace AdaptiveAIBot.Services
                 Temperature = 0.7
             };
 
-            var json = JsonSerializer.Serialize(request, new JsonSerializerOptions
+            // ✅ ИСПРАВЛЕНО: Правильная настройка JSON serialization
+            var jsonOptions = new JsonSerializerOptions
             {
-                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-            });
+                PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                WriteIndented = false
+            };
 
+            var json = JsonSerializer.Serialize(request, jsonOptions);
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
             _httpClient.DefaultRequestHeaders.Clear();
@@ -73,7 +76,14 @@ namespace AdaptiveAIBot.Services
                 var responseJson = await response.Content.ReadAsStringAsync();
                 _logger.LogInformation($"DeepSeek response received, length: {responseJson.Length}");
 
-                var deepSeekResponse = JsonSerializer.Deserialize<DeepSeekResponse>(responseJson);
+                // ✅ ИСПРАВЛЕНО: Обработка ответа с правильным JsonNamingPolicy
+                var responseOptions = new JsonSerializerOptions
+                {
+                    PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
+                    PropertyNameCaseInsensitive = true
+                };
+
+                var deepSeekResponse = JsonSerializer.Deserialize<DeepSeekResponse>(responseJson, responseOptions);
                 var aiResponse = deepSeekResponse?.Choices?.FirstOrDefault()?.Message?.Content ?? "Не удалось получить ответ.";
 
                 _logger.LogInformation($"AI response generated, length: {aiResponse.Length}");

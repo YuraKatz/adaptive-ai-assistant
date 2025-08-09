@@ -1,17 +1,10 @@
 ﻿using Microsoft.Extensions.Logging;
 using AdaptiveAIBot.Models;
 using System.Collections.Concurrent;
+using System.Text.RegularExpressions;
 
 namespace AdaptiveAIBot.Services
 {
-    public interface IConversationService
-    {
-        Task<ConversationContext> GetConversationContextAsync(long userId);
-        Task AddMessageAsync(long userId, string userMessage, string aiResponse);
-        Task<bool> ShouldCompressContextAsync(long userId);
-        Task CompressConversationAsync(long userId);
-    }
-
     public class ConversationService : IConversationService
     {
         private readonly ILogger<ConversationService> _logger;
@@ -48,12 +41,17 @@ namespace AdaptiveAIBot.Services
         {
             var context = await GetConversationContextAsync(userId);
 
+            // Анализируем сообщение на важность
+            var messageAnalysis = await AnalyzeMessageAsync(userMessage);
+
             // Добавляем пару сообщений: пользователь -> AI
             context.Messages.Add(new ConversationMessage
             {
                 Role = "user",
                 Content = userMessage,
-                Timestamp = DateTime.UtcNow
+                Timestamp = DateTime.UtcNow,
+                ImportanceScore = messageAnalysis.ImportanceScore,
+                Topics = messageAnalysis.Topics
             });
 
             context.Messages.Add(new ConversationMessage
@@ -66,7 +64,7 @@ namespace AdaptiveAIBot.Services
             context.LastActivity = DateTime.UtcNow;
             context.MessageCount = context.Messages.Count;
 
-            _logger.LogInformation($"Added message pair for user {userId}, total messages: {context.MessageCount}");
+            _logger.LogInformation($"Added message pair for user {userId}, total messages: {context.MessageCount}, importance: {messageAnalysis.ImportanceScore:F2}");
 
             // Проверяем нужно ли сжимать контекст
             if (await ShouldCompressContextAsync(userId))
@@ -127,6 +125,8 @@ namespace AdaptiveAIBot.Services
                 };
 
                 context.Messages.AddRange(recentMessages);
+                context.IsCompressed = true;
+                context.CompressedSummary = summary;
 
                 _logger.LogInformation($"Compressed {messagesToCompress.Count} messages for user {userId}, kept {recentMessages.Count} recent messages");
             }
@@ -134,39 +134,117 @@ namespace AdaptiveAIBot.Services
             return Task.CompletedTask;
         }
 
+        public Task<MessageAnalysis> AnalyzeMessageAsync(string message)
+        {
+            var analysis = new MessageAnalysis();
+
+            // Простая эвристика для определения важности
+            var importanceKeywords = new[]
+            {
+                "проект", "задача", "решение", "встреча", "дедлайн",
+                "клиент", "контракт", "важно", "срочно", "план",
+                "цель", "результат", "статус", "проблема", "идея"
+            };
+
+            var topics = new List<string>();
+            var extractedFacts = new List<string>();
+            double importanceScore = 0.0;
+
+            var messageLower = message.ToLower();
+
+            // Ищем ключевые слова
+            foreach (var keyword in importanceKeywords)
+            {
+                if (messageLower.Contains(keyword))
+                {
+                    importanceScore += 0.1;
+                    topics.Add(keyword);
+                }
+            }
+
+            // Ищем даты
+            var datePattern = @"\d{1,2}[\.\/\-]\d{1,2}[\.\/\-]\d{2,4}";
+            if (Regex.IsMatch(message, datePattern))
+            {
+                importanceScore += 0.2;
+                extractedFacts.Add("содержит дату");
+            }
+
+            // Ищем числа (возможно, метрики)
+            var numberPattern = @"\d+%|\d+\s*(рублей|долларов|евро|часов|дней)";
+            if (Regex.IsMatch(message, numberPattern))
+            {
+                importanceScore += 0.15;
+                extractedFacts.Add("содержит числовые данные");
+            }
+
+            // Длинные сообщения обычно важнее
+            if (message.Length > 100)
+            {
+                importanceScore += 0.1;
+            }
+
+            analysis.ImportanceScore = Math.Min(1.0, importanceScore);
+            analysis.Topics = topics.Distinct().ToList();
+            analysis.ExtractedFacts = extractedFacts;
+            analysis.ContainsImportantInfo = importanceScore > 0.3;
+
+            return Task.FromResult(analysis);
+        }
+
+        public async Task<List<KnowledgeUpdateSuggestion>> GetKnowledgeUpdateSuggestionsAsync(long userId)
+        {
+            var context = await GetConversationContextAsync(userId);
+            var suggestions = new List<KnowledgeUpdateSuggestion>();
+
+            // Анализируем последние сообщения на предмет важной информации
+            var recentImportantMessages = context.Messages
+                .Where(m => m.Role == "user" && m.ImportanceScore > 0.3)
+                .TakeLast(5)
+                .ToList();
+
+            foreach (var message in recentImportantMessages)
+            {
+                if (message.Topics.Contains("проект"))
+                {
+                    suggestions.Add(new KnowledgeUpdateSuggestion
+                    {
+                        TargetFile = "projects.yaml",
+                        UpdateType = "add_section",
+                        Data = new { content = message.Content, timestamp = message.Timestamp },
+                        Reason = "Обнаружена информация о проекте",
+                        Confidence = message.ImportanceScore ?? 0.5
+                    });
+                }
+
+                if (message.Topics.Contains("встреча"))
+                {
+                    suggestions.Add(new KnowledgeUpdateSuggestion
+                    {
+                        TargetFile = "meetings.yaml",
+                        UpdateType = "add_section",
+                        Data = new { content = message.Content, timestamp = message.Timestamp },
+                        Reason = "Обнаружена информация о встрече",
+                        Confidence = message.ImportanceScore ?? 0.5
+                    });
+                }
+            }
+
+            _logger.LogInformation($"Generated {suggestions.Count} knowledge update suggestions for user {userId}");
+            return suggestions;
+        }
+
         private string CreateConversationSummary(List<ConversationMessage> messages)
         {
             // Простая стратегия для MVP - просто основные темы
             var userMessages = messages.Where(m => m.Role == "user").Select(m => m.Content).ToList();
-            var aiMessages = messages.Where(m => m.Role == "assistant").Select(m => m.Content).ToList();
+            var allTopics = messages.SelectMany(m => m.Topics).Distinct().ToList();
 
-            var topics = ExtractTopics(userMessages);
             var timespan = messages.Max(m => m.Timestamp) - messages.Min(m => m.Timestamp);
 
             return $"Conversation summary ({messages.Count} messages over {timespan.TotalMinutes:F0} minutes): " +
-                   $"Topics discussed: {string.Join(", ", topics)}. " +
-                   $"User asked about: {string.Join(", ", userMessages.Take(3))}";
-        }
-
-        private List<string> ExtractTopics(List<string> messages)
-        {
-            // Очень простое извлечение тем - ключевые слова
-            var keywords = new HashSet<string>();
-
-            foreach (var message in messages)
-            {
-                var words = message.ToLower()
-                    .Split(' ', StringSplitOptions.RemoveEmptyEntries)
-                    .Where(w => w.Length > 3)
-                    .Take(2);
-
-                foreach (var word in words)
-                {
-                    keywords.Add(word);
-                }
-            }
-
-            return keywords.Take(5).ToList();
+                   $"Topics discussed: {string.Join(", ", allTopics.Take(5))}. " +
+                   $"Key user queries: {string.Join("; ", userMessages.Take(3).Select(m => m?.Substring(0, Math.Min(50, m.Length ?? 0))))}";
         }
     }
 }
