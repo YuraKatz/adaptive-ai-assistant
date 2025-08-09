@@ -2,8 +2,9 @@
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Azure.Functions.Worker;
 using Microsoft.Extensions.Logging;
-using System.Text.Json;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Serialization;
 
 namespace AdaptiveAIBot
 {
@@ -33,25 +34,22 @@ namespace AdaptiveAIBot
                 string requestBody = await new StreamReader(req.Body).ReadToEndAsync();
                 _logger.LogInformation($"Request body: {requestBody}");
 
-                // Парсим Telegram Update
-                var telegramUpdate = JsonSerializer.Deserialize<TelegramUpdate>(requestBody);
+                // Временно - простое тестирование без парсинга Telegram
+                var userMessage = "Привет! Как дела?"; // Хардкод для теста
 
-                if (telegramUpdate?.Message?.Text == null)
-                {
-                    return new OkResult(); // Ignore non-text messages
-                }
-
-                // Извлекаем данные сообщения
-                var chatId = telegramUpdate.Message.Chat.Id;
-                var userMessage = telegramUpdate.Message.Text;
-
-                _logger.LogInformation($"Chat ID: {chatId}, Message: {userMessage}");
+                _logger.LogInformation($"Test message: {userMessage}");
 
                 // Вызываем DeepSeek API
                 var aiResponse = await CallDeepSeekApi(userMessage);
 
-                // Отправляем ответ обратно в Telegram
-                await SendTelegramMessage(chatId, aiResponse);
+                _logger.LogInformation($"AI Response: {aiResponse}");
+
+                // Возвращаем ответ AI (вместо отправки в Telegram)
+                return new OkObjectResult(new
+                {
+                    userMessage = userMessage,
+                    aiResponse = aiResponse
+                });
 
                 return new OkResult();
             }
@@ -64,6 +62,9 @@ namespace AdaptiveAIBot
 
         private async Task<string> CallDeepSeekApi(string userMessage)
         {
+            _logger.LogInformation($"Calling DeepSeek API with message: {userMessage}");
+            _logger.LogInformation($"API Key present: {!string.IsNullOrEmpty(_deepSeekApiKey)}");
+
             var request = new
             {
                 model = "deepseek-chat",
@@ -81,7 +82,9 @@ namespace AdaptiveAIBot
             _httpClient.DefaultRequestHeaders.Clear();
             _httpClient.DefaultRequestHeaders.Add("Authorization", $"Bearer {_deepSeekApiKey}");
 
+            _logger.LogInformation("Sending request to DeepSeek API...");
             var response = await _httpClient.PostAsync("https://api.deepseek.com/v1/chat/completions", content);
+            _logger.LogInformation($"DeepSeek API response status: {response.StatusCode}");
 
             if (!response.IsSuccessStatusCode)
             {
@@ -91,6 +94,8 @@ namespace AdaptiveAIBot
             }
 
             var responseJson = await response.Content.ReadAsStringAsync();
+            _logger.LogInformation($"DeepSeek raw response: {responseJson}");
+
             var deepSeekResponse = JsonSerializer.Deserialize<DeepSeekResponse>(responseJson);
 
             return deepSeekResponse?.Choices?.FirstOrDefault()?.Message?.Content ?? "Не удалось получить ответ.";
@@ -155,16 +160,19 @@ namespace AdaptiveAIBot
 
     public class DeepSeekResponse
     {
+        [JsonPropertyName("choices")]
         public DeepSeekChoice[]? Choices { get; set; }
     }
 
     public class DeepSeekChoice
     {
+        [JsonPropertyName("message")]
         public DeepSeekMessage? Message { get; set; }
     }
 
     public class DeepSeekMessage
     {
+        [JsonPropertyName("content")]
         public string? Content { get; set; }
     }
 }
