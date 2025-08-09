@@ -1,11 +1,21 @@
-using Microsoft.Azure.Functions.Worker.Builder;
+﻿using Microsoft.Azure.Functions.Worker.Builder;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using AdaptiveAIBot.Services;
 
 var builder = FunctionsApplication.CreateBuilder(args);
 
 builder.ConfigureFunctionsWebApplication();
 
-// Application Insights isn't enabled by default. See https://aka.ms/AAt8mw4.
+// Регистрируем HTTP Client
+builder.Services.AddHttpClient();
+
+// Регистрируем наши сервисы
+builder.Services.AddScoped<IDeepSeekService, DeepSeekService>();
+builder.Services.AddScoped<ITelegramService, TelegramService>();
+builder.Services.AddScoped<IConversationService, ConversationService>();
+
+// Application Insights (пока закомментировано для экономии)
 // builder.Services
 //     .AddApplicationInsightsTelemetryWorkerService()
 //     .ConfigureFunctionsApplicationInsights();
